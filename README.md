@@ -109,5 +109,5 @@ Prompt-Bloat im UI-Code.
 
 - [x] **Phase 1**: Multi-Provider, Streaming, Voice-Input, alle 4 Modi
 - [x] **Phase 2**: Supabase Auth (Magic-Link) + Session-Persistenz + Sidebar
-- [ ] **Phase 3**: Mindmap-Renderer (react-flow), Markdown-Export
+- [x] **Phase 3**: Interaktive Mindmap-Visualisierung + Markdown-Export
 - [ ] **Phase 4**: Audio-Storage in Supabase, Session-Suche

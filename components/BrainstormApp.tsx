@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MODE_LIST, type ModeId } from "@/lib/prompts";
 import type { ProviderName } from "@/lib/llm/types";
 import RecordButton from "@/components/RecordButton";
 import SessionSidebar from "@/components/SessionSidebar";
+import MindmapView from "@/components/MindmapView";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { parseMarkdownTree } from "@/lib/markdown/parseTree";
+import {
+  buildSessionMarkdown,
+  downloadMarkdown,
+  slugify,
+} from "@/lib/markdown/exportSession";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -179,6 +186,21 @@ export default function BrainstormApp() {
     window.location.href = "/login";
   }
 
+  function exportMarkdown() {
+    if (messages.length === 0) return;
+    const firstUser = messages.find((m) => m.role === "user");
+    const title = firstUser?.content.slice(0, 60) ?? "session";
+    const md = buildSessionMarkdown({
+      mode,
+      provider,
+      model,
+      messages,
+      title,
+    });
+    const date = new Date().toISOString().slice(0, 10);
+    downloadMarkdown(`brainstorm-${date}-${slugify(title)}.md`, md);
+  }
+
   async function handleAudio(blob: Blob) {
     setTranscribing(true);
     try {
@@ -236,6 +258,14 @@ export default function BrainstormApp() {
               disabled={models.length === 0}
               placeholder={modelsError ? "n/a" : "lädt…"}
             />
+            <button
+              onClick={exportMarkdown}
+              disabled={messages.length === 0}
+              className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 px-2 py-1 disabled:opacity-30"
+              title="Session als Markdown exportieren"
+            >
+              ⤓ Export
+            </button>
           </div>
         </header>
 
@@ -249,7 +279,12 @@ export default function BrainstormApp() {
           <div className="max-w-3xl mx-auto space-y-4">
             {messages.length === 0 && <EmptyState mode={mode} />}
             {messages.map((m, i) => (
-              <Message key={i} msg={m} />
+              <Message
+                key={i}
+                msg={m}
+                mode={mode}
+                streaming={streaming && i === messages.length - 1}
+              />
             ))}
           </div>
         </div>
@@ -335,8 +370,23 @@ function Picker({
   );
 }
 
-function Message({ msg }: { msg: Msg }) {
+function Message({
+  msg,
+  mode,
+  streaming,
+}: {
+  msg: Msg;
+  mode: ModeId;
+  streaming: boolean;
+}) {
   const isUser = msg.role === "user";
+  const isMindmapAssistant =
+    !isUser && mode === "mindmap" && !streaming && msg.content.length > 0;
+
+  if (isMindmapAssistant) {
+    return <MindmapMessage content={msg.content} />;
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
@@ -350,6 +400,41 @@ function Message({ msg }: { msg: Msg }) {
           <span className="opacity-50 italic">denke nach…</span>
         )}
       </div>
+    </div>
+  );
+}
+
+function MindmapMessage({ content }: { content: string }) {
+  const tree = useMemo(() => parseMarkdownTree(content), [content]);
+  const [showRaw, setShowRaw] = useState(false);
+
+  if (!tree) {
+    return (
+      <div className="flex justify-start">
+        <div className="max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+          {content}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-end gap-2 text-xs">
+        <button
+          onClick={() => setShowRaw((v) => !v)}
+          className="text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 underline"
+        >
+          {showRaw ? "Mindmap zeigen" : "Markdown zeigen"}
+        </button>
+      </div>
+      {showRaw ? (
+        <div className="rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800">
+          {content}
+        </div>
+      ) : (
+        <MindmapView tree={tree} />
+      )}
     </div>
   );
 }
