@@ -1,0 +1,307 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import { MODE_LIST, type ModeId } from "@/lib/prompts";
+import type { ProviderName } from "@/lib/llm/types";
+import RecordButton from "@/components/RecordButton";
+
+type Msg = { role: "user" | "assistant"; content: string };
+
+const PROVIDERS: { id: ProviderName; label: string }[] = [
+  { id: "ollama", label: "Ollama (lokal)" },
+  { id: "anthropic", label: "Claude" },
+  { id: "openai", label: "OpenAI" },
+];
+
+export default function BrainstormApp() {
+  const [provider, setProvider] = useState<ProviderName>("ollama");
+  const [models, setModels] = useState<string[]>([]);
+  const [model, setModel] = useState<string>("");
+  const [modelsError, setModelsError] = useState<string | null>(null);
+  const [mode, setMode] = useState<ModeId>("socratic");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [input, setInput] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setModels([]);
+    setModelsError(null);
+    fetch(`/api/models?provider=${provider}`)
+      .then((r) => r.json())
+      .then((data) => {
+        if (cancelled) return;
+        if (data.error) setModelsError(data.error);
+        const list: string[] = data.models ?? [];
+        setModels(list);
+        setModel(list[0] ?? "");
+      })
+      .catch((e) => {
+        if (!cancelled) setModelsError(String(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages]);
+
+  async function send(text: string) {
+    if (!text.trim() || !model || streaming) return;
+    const next: Msg[] = [...messages, { role: "user", content: text.trim() }];
+    setMessages(next);
+    setInput("");
+    setStreaming(true);
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      const res = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model, mode, messages: next }),
+        signal: ctrl.signal,
+      });
+
+      if (!res.ok || !res.body) {
+        const err = await res.text().catch(() => "");
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: `[error: ${res.status}] ${err}` },
+        ]);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let acc = "";
+      setMessages((m) => [...m, { role: "assistant", content: "" }]);
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        acc += decoder.decode(value, { stream: true });
+        setMessages((m) => {
+          const copy = [...m];
+          copy[copy.length - 1] = { role: "assistant", content: acc };
+          return copy;
+        });
+      }
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") {
+        setMessages((m) => [
+          ...m,
+          { role: "assistant", content: `[error] ${(err as Error).message}` },
+        ]);
+      }
+    } finally {
+      setStreaming(false);
+      abortRef.current = null;
+    }
+  }
+
+  function stop() {
+    abortRef.current?.abort();
+  }
+
+  function reset() {
+    stop();
+    setMessages([]);
+  }
+
+  async function handleAudio(blob: Blob) {
+    setTranscribing(true);
+    try {
+      const fd = new FormData();
+      fd.append("audio", blob, "recording.webm");
+      const res = await fetch("/api/transcribe", { method: "POST", body: fd });
+      const data = await res.json();
+      if (data.text) {
+        setInput((prev) => (prev ? `${prev} ${data.text}` : data.text));
+      } else if (data.error) {
+        setInput((prev) => `${prev}\n[transcription error: ${data.error}]`);
+      }
+    } catch (err) {
+      setInput((prev) => `${prev}\n[error: ${(err as Error).message}]`);
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-col h-dvh bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100">
+      <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center gap-4 flex-wrap">
+        <h1 className="text-lg font-semibold tracking-tight">
+          🧠 Brainstorm Partner
+        </h1>
+
+        <div className="flex items-center gap-2 ml-auto flex-wrap">
+          <Picker
+            label="Modus"
+            value={mode}
+            onChange={(v) => setMode(v as ModeId)}
+            options={MODE_LIST.map((m) => ({ value: m.id, label: m.label }))}
+          />
+          <Picker
+            label="Provider"
+            value={provider}
+            onChange={(v) => setProvider(v as ProviderName)}
+            options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+          />
+          <Picker
+            label="Modell"
+            value={model}
+            onChange={setModel}
+            options={models.map((m) => ({ value: m, label: m }))}
+            disabled={models.length === 0}
+            placeholder={modelsError ? "n/a" : "lädt…"}
+          />
+          <button
+            onClick={reset}
+            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 px-2 py-1"
+            title="Neue Session"
+          >
+            ↺ neu
+          </button>
+        </div>
+      </header>
+
+      {modelsError && (
+        <div className="px-6 py-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900">
+          Modelle für „{provider}" konnten nicht geladen werden: {modelsError}
+        </div>
+      )}
+
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
+        <div className="max-w-3xl mx-auto space-y-4">
+          {messages.length === 0 && (
+            <EmptyState mode={mode} />
+          )}
+          {messages.map((m, i) => (
+            <Message key={i} msg={m} />
+          ))}
+        </div>
+      </div>
+
+      <footer className="border-t border-zinc-200 dark:border-zinc-800 px-6 py-4">
+        <div className="max-w-3xl mx-auto flex items-end gap-3">
+          <RecordButton onAudio={handleAudio} disabled={streaming} />
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send(input);
+              }
+            }}
+            rows={2}
+            placeholder={
+              transcribing
+                ? "Transkribiere…"
+                : "Sprich los oder tippe (Enter sendet, Shift+Enter = Zeilenumbruch)"
+            }
+            className="flex-1 resize-none rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+            disabled={transcribing}
+          />
+          {streaming ? (
+            <button
+              onClick={stop}
+              className="px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              onClick={() => send(input)}
+              disabled={!input.trim() || !model}
+              className="px-4 py-3 rounded-xl bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 text-white text-sm font-medium disabled:opacity-40"
+            >
+              Senden
+            </button>
+          )}
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+function Picker({
+  label,
+  value,
+  onChange,
+  options,
+  disabled,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+  disabled?: boolean;
+  placeholder?: string;
+}) {
+  return (
+    <label className="text-xs text-zinc-500 flex items-center gap-1">
+      {label}:
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        disabled={disabled}
+        className="text-sm bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-zinc-400 disabled:opacity-50"
+      >
+        {options.length === 0 && (
+          <option value="">{placeholder ?? "—"}</option>
+        )}
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function Message({ msg }: { msg: Msg }) {
+  const isUser = msg.role === "user";
+  return (
+    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+      <div
+        className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm whitespace-pre-wrap ${
+          isUser
+            ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900"
+            : "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800"
+        }`}
+      >
+        {msg.content || (
+          <span className="opacity-50 italic">denke nach…</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EmptyState({ mode }: { mode: ModeId }) {
+  const m = MODE_LIST.find((x) => x.id === mode)!;
+  return (
+    <div className="text-center py-16 text-zinc-500">
+      <div className="text-4xl mb-4">🎙️</div>
+      <h2 className="text-xl font-medium mb-2 text-zinc-700 dark:text-zinc-300">
+        {m.label}
+      </h2>
+      <p className="text-sm max-w-md mx-auto">{m.description}</p>
+      <p className="text-xs mt-6 opacity-70">
+        Drück das Mikro oder tippe drauflos.
+      </p>
+    </div>
+  );
+}
