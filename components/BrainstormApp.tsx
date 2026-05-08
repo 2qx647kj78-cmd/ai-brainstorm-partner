@@ -4,6 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { MODE_LIST, type ModeId } from "@/lib/prompts";
 import type { ProviderName } from "@/lib/llm/types";
 import RecordButton from "@/components/RecordButton";
+import SessionSidebar from "@/components/SessionSidebar";
+import { isSupabaseConfigured } from "@/lib/supabase/client";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -23,8 +25,12 @@ export default function BrainstormApp() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [transcribing, setTranscribing] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sidebarRefresh, setSidebarRefresh] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const persistEnabled = isSupabaseConfigured();
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +60,26 @@ export default function BrainstormApp() {
     });
   }, [messages]);
 
+  async function ensureSession(): Promise<string | null> {
+    if (!persistEnabled) return null;
+    if (sessionId) return sessionId;
+    try {
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode, provider, model }),
+      });
+      const data = await res.json();
+      if (data.session?.id) {
+        setSessionId(data.session.id);
+        return data.session.id;
+      }
+    } catch (err) {
+      console.error("Failed to create session", err);
+    }
+    return null;
+  }
+
   async function send(text: string) {
     if (!text.trim() || !model || streaming) return;
     const next: Msg[] = [...messages, { role: "user", content: text.trim() }];
@@ -61,6 +87,7 @@ export default function BrainstormApp() {
     setInput("");
     setStreaming(true);
 
+    const sid = await ensureSession();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
@@ -68,7 +95,13 @@ export default function BrainstormApp() {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, model, mode, messages: next }),
+        body: JSON.stringify({
+          provider,
+          model,
+          mode,
+          sessionId: sid ?? undefined,
+          messages: next,
+        }),
         signal: ctrl.signal,
       });
 
@@ -105,6 +138,7 @@ export default function BrainstormApp() {
     } finally {
       setStreaming(false);
       abortRef.current = null;
+      setSidebarRefresh((n) => n + 1);
     }
   }
 
@@ -112,9 +146,37 @@ export default function BrainstormApp() {
     abortRef.current?.abort();
   }
 
-  function reset() {
+  function newSession() {
     stop();
     setMessages([]);
+    setSessionId(null);
+  }
+
+  async function loadSession(id: string) {
+    stop();
+    try {
+      const res = await fetch(`/api/sessions/${id}`);
+      const data = await res.json();
+      if (data.session) {
+        setSessionId(data.session.id);
+        setMode(data.session.mode);
+        setProvider(data.session.provider);
+        setModel(data.session.model);
+        setMessages(
+          (data.messages ?? []).map((m: { role: "user" | "assistant"; content: string }) => ({
+            role: m.role,
+            content: m.content,
+          })),
+        );
+      }
+    } catch (err) {
+      console.error("Failed to load session", err);
+    }
+  }
+
+  async function signOut() {
+    await fetch("/auth/signout", { method: "POST" });
+    window.location.href = "/login";
   }
 
   async function handleAudio(blob: Blob) {
@@ -137,99 +199,101 @@ export default function BrainstormApp() {
   }
 
   return (
-    <div className="flex flex-col h-dvh bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100">
-      <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center gap-4 flex-wrap">
-        <h1 className="text-lg font-semibold tracking-tight">
-          🧠 Brainstorm Partner
-        </h1>
+    <div className="flex h-dvh bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100">
+      <SessionSidebar
+        currentId={sessionId}
+        onSelect={loadSession}
+        onNew={newSession}
+        onSignOut={signOut}
+        refreshKey={sidebarRefresh}
+        enabled={persistEnabled}
+      />
 
-        <div className="flex items-center gap-2 ml-auto flex-wrap">
-          <Picker
-            label="Modus"
-            value={mode}
-            onChange={(v) => setMode(v as ModeId)}
-            options={MODE_LIST.map((m) => ({ value: m.id, label: m.label }))}
-          />
-          <Picker
-            label="Provider"
-            value={provider}
-            onChange={(v) => setProvider(v as ProviderName)}
-            options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
-          />
-          <Picker
-            label="Modell"
-            value={model}
-            onChange={setModel}
-            options={models.map((m) => ({ value: m, label: m }))}
-            disabled={models.length === 0}
-            placeholder={modelsError ? "n/a" : "lädt…"}
-          />
-          <button
-            onClick={reset}
-            className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 px-2 py-1"
-            title="Neue Session"
-          >
-            ↺ neu
-          </button>
+      <div className="flex flex-col flex-1 min-w-0">
+        <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center gap-4 flex-wrap">
+          <h1 className="text-lg font-semibold tracking-tight">
+            🧠 Brainstorm Partner
+          </h1>
+
+          <div className="flex items-center gap-2 ml-auto flex-wrap">
+            <Picker
+              label="Modus"
+              value={mode}
+              onChange={(v) => setMode(v as ModeId)}
+              options={MODE_LIST.map((m) => ({ value: m.id, label: m.label }))}
+            />
+            <Picker
+              label="Provider"
+              value={provider}
+              onChange={(v) => setProvider(v as ProviderName)}
+              options={PROVIDERS.map((p) => ({ value: p.id, label: p.label }))}
+            />
+            <Picker
+              label="Modell"
+              value={model}
+              onChange={setModel}
+              options={models.map((m) => ({ value: m, label: m }))}
+              disabled={models.length === 0}
+              placeholder={modelsError ? "n/a" : "lädt…"}
+            />
+          </div>
+        </header>
+
+        {modelsError && (
+          <div className="px-6 py-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900">
+            Modelle für „{provider}" konnten nicht geladen werden: {modelsError}
+          </div>
+        )}
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
+          <div className="max-w-3xl mx-auto space-y-4">
+            {messages.length === 0 && <EmptyState mode={mode} />}
+            {messages.map((m, i) => (
+              <Message key={i} msg={m} />
+            ))}
+          </div>
         </div>
-      </header>
 
-      {modelsError && (
-        <div className="px-6 py-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-900">
-          Modelle für „{provider}" konnten nicht geladen werden: {modelsError}
-        </div>
-      )}
-
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
-        <div className="max-w-3xl mx-auto space-y-4">
-          {messages.length === 0 && (
-            <EmptyState mode={mode} />
-          )}
-          {messages.map((m, i) => (
-            <Message key={i} msg={m} />
-          ))}
-        </div>
-      </div>
-
-      <footer className="border-t border-zinc-200 dark:border-zinc-800 px-6 py-4">
-        <div className="max-w-3xl mx-auto flex items-end gap-3">
-          <RecordButton onAudio={handleAudio} disabled={streaming} />
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send(input);
+        <footer className="border-t border-zinc-200 dark:border-zinc-800 px-6 py-4">
+          <div className="max-w-3xl mx-auto flex items-end gap-3">
+            <RecordButton onAudio={handleAudio} disabled={streaming} />
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send(input);
+                }
+              }}
+              rows={2}
+              placeholder={
+                transcribing
+                  ? "Transkribiere…"
+                  : "Sprich los oder tippe (Enter sendet, Shift+Enter = Zeilenumbruch)"
               }
-            }}
-            rows={2}
-            placeholder={
-              transcribing
-                ? "Transkribiere…"
-                : "Sprich los oder tippe (Enter sendet, Shift+Enter = Zeilenumbruch)"
-            }
-            className="flex-1 resize-none rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
-            disabled={transcribing}
-          />
-          {streaming ? (
-            <button
-              onClick={stop}
-              className="px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
-            >
-              Stop
-            </button>
-          ) : (
-            <button
-              onClick={() => send(input)}
-              disabled={!input.trim() || !model}
-              className="px-4 py-3 rounded-xl bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 text-white text-sm font-medium disabled:opacity-40"
-            >
-              Senden
-            </button>
-          )}
-        </div>
-      </footer>
+              className="flex-1 resize-none rounded-xl border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-zinc-400"
+              disabled={transcribing}
+            />
+            {streaming ? (
+              <button
+                onClick={stop}
+                className="px-4 py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-medium"
+              >
+                Stop
+              </button>
+            ) : (
+              <button
+                onClick={() => send(input)}
+                disabled={!input.trim() || !model}
+                className="px-4 py-3 rounded-xl bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 text-white text-sm font-medium disabled:opacity-40"
+              >
+                Senden
+              </button>
+            )}
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }

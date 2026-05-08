@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getProvider } from "@/lib/llm";
 import { getMode } from "@/lib/prompts";
 import { requireUser } from "@/lib/auth/requireUser";
+import { createServerSupabase } from "@/lib/supabase/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,6 +12,7 @@ const ChatRequestSchema = z.object({
   provider: z.enum(["ollama", "anthropic", "openai"]),
   model: z.string().min(1),
   mode: z.enum(["socratic", "outline", "proContra", "mindmap"]),
+  sessionId: z.string().uuid().optional(),
   messages: z
     .array(
       z.object({
@@ -22,9 +24,9 @@ const ChatRequestSchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const authResult = await requireUser();
-  if (!authResult.ok) {
-    return new Response(JSON.stringify({ error: authResult.error }), {
+  const auth = await requireUser();
+  if (!auth.ok) {
+    return new Response(JSON.stringify({ error: auth.error }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
     });
@@ -43,7 +45,23 @@ export async function POST(req: NextRequest) {
   const provider = getProvider(body.provider);
   const mode = getMode(body.mode);
 
+  const lastUserMessage = [...body.messages]
+    .reverse()
+    .find((m) => m.role === "user");
+
+  // Persist the new user message before streaming, if we have an authed session.
+  if (auth.userId && body.sessionId && lastUserMessage) {
+    const supabase = await createServerSupabase();
+    await supabase.from("messages").insert({
+      session_id: body.sessionId,
+      role: "user",
+      content: lastUserMessage.content,
+    });
+  }
+
   const encoder = new TextEncoder();
+  let assistantText = "";
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
@@ -53,6 +71,7 @@ export async function POST(req: NextRequest) {
           messages: body.messages,
           signal: req.signal,
         })) {
+          assistantText += chunk;
           controller.enqueue(encoder.encode(chunk));
         }
         controller.close();
@@ -60,6 +79,39 @@ export async function POST(req: NextRequest) {
         const msg = err instanceof Error ? err.message : String(err);
         controller.enqueue(encoder.encode(`\n\n[error: ${msg}]`));
         controller.close();
+      } finally {
+        if (auth.userId && body.sessionId && assistantText) {
+          try {
+            const supabase = await createServerSupabase();
+            await supabase.from("messages").insert({
+              session_id: body.sessionId,
+              role: "assistant",
+              content: assistantText,
+            });
+            await supabase
+              .from("sessions")
+              .update({
+                updated_at: new Date().toISOString(),
+                title:
+                  lastUserMessage && lastUserMessage.content.length <= 60
+                    ? undefined
+                    : undefined,
+              })
+              .eq("id", body.sessionId);
+            // Best-effort: set title from first user message if not set.
+            if (lastUserMessage) {
+              await supabase
+                .from("sessions")
+                .update({
+                  title: lastUserMessage.content.slice(0, 80),
+                })
+                .eq("id", body.sessionId)
+                .is("title", null);
+            }
+          } catch {
+            // Persistence failure should not break the stream that already completed.
+          }
+        }
       }
     },
   });

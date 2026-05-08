@@ -66,19 +66,22 @@ pnpm dev
 3. Mikrofon drücken oder einfach lostippen
 4. Stop drücken → Transkription erscheint im Eingabefeld → Senden
 
-## Auth & Persistenz (optional, Phase 2)
+## Auth & Persistenz
 
-Standardmäßig läuft die App im **Single-User-Dev-Mode** ohne Login. Für Multi-User
-mit gespeicherten Sessions:
+Standardmäßig läuft die App im **Single-User-Dev-Mode** ohne Login (sobald
+Supabase-Env-Vars fehlen). Für Multi-User mit gespeicherten Sessions:
 
 1. Supabase-Projekt anlegen (https://supabase.com)
 2. SQL aus `supabase/migrations/0001_init.sql` im SQL-Editor ausführen
-3. URL + Anon-Key in `.env.local` setzen:
+3. URL + Anon-/Publishable-Key in `.env.local` setzen:
    ```
    NEXT_PUBLIC_SUPABASE_URL=https://xxx.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGc...
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_...
    ```
-4. Login-Page wird in Phase 2 gebaut.
+4. App neu starten → Login-Seite (Magic-Link per E-Mail) erscheint automatisch
+
+Sessions + Messages werden persistiert (RLS aktiv: jeder User sieht nur eigene
+Daten). Sidebar links zeigt vergangene Sessions, klickbar zum Weiterführen.
 
 ## Architektur
 
@@ -105,6 +108,6 @@ Prompt-Bloat im UI-Code.
 ## Roadmap
 
 - [x] **Phase 1**: Multi-Provider, Streaming, Voice-Input, alle 4 Modi
-- [ ] **Phase 2**: Supabase Auth + Session-Persistenz
+- [x] **Phase 2**: Supabase Auth (Magic-Link) + Session-Persistenz + Sidebar
 - [ ] **Phase 3**: Mindmap-Renderer (react-flow), Markdown-Export
-- [ ] **Phase 4**: Audio-Storage in Supabase, Session-Sidebar mit Verlauf
+- [ ] **Phase 4**: Audio-Storage in Supabase, Session-Suche
