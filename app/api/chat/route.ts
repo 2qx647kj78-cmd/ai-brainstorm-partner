@@ -4,6 +4,7 @@ import { getProvider } from "@/lib/llm";
 import { getMode } from "@/lib/prompts";
 import { requireUser } from "@/lib/auth/requireUser";
 import { createServerSupabase } from "@/lib/supabase/server";
+import { generateTitle } from "@/lib/llm/title";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,21 +91,23 @@ export async function POST(req: NextRequest) {
             });
             await supabase
               .from("sessions")
-              .update({
-                updated_at: new Date().toISOString(),
-                title:
-                  lastUserMessage && lastUserMessage.content.length <= 60
-                    ? undefined
-                    : undefined,
-              })
+              .update({ updated_at: new Date().toISOString() })
               .eq("id", body.sessionId);
-            // Best-effort: set title from first user message if not set.
-            if (lastUserMessage) {
+
+            // Auto-title on the first turn: generate via LLM, fall back to
+            // the first user message if generation fails.
+            const isFirstTurn = body.messages.length === 1;
+            if (isFirstTurn && lastUserMessage) {
+              const llmTitle = await generateTitle({
+                provider: body.provider,
+                model: body.model,
+                userMessage: lastUserMessage.content,
+                assistantMessage: assistantText,
+              });
+              const title = llmTitle ?? lastUserMessage.content.slice(0, 80);
               await supabase
                 .from("sessions")
-                .update({
-                  title: lastUserMessage.content.slice(0, 80),
-                })
+                .update({ title })
                 .eq("id", body.sessionId)
                 .is("title", null);
             }

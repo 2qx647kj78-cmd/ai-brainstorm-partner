@@ -34,6 +34,7 @@ export default function BrainstormApp() {
   const [transcribing, setTranscribing] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sidebarRefresh, setSidebarRefresh] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -224,15 +225,32 @@ export default function BrainstormApp() {
     <div className="flex h-dvh bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100">
       <SessionSidebar
         currentId={sessionId}
-        onSelect={loadSession}
-        onNew={newSession}
+        onSelect={(id) => {
+          loadSession(id);
+          setSidebarOpen(false);
+        }}
+        onNew={() => {
+          newSession();
+          setSidebarOpen(false);
+        }}
         onSignOut={signOut}
         refreshKey={sidebarRefresh}
         enabled={persistEnabled}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
 
       <div className="flex flex-col flex-1 min-w-0">
         <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4 flex items-center gap-4 flex-wrap">
+          {persistEnabled && (
+            <button
+              onClick={() => setSidebarOpen(true)}
+              className="md:hidden text-xl text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100"
+              aria-label="Sessions öffnen"
+            >
+              ☰
+            </button>
+          )}
           <h1 className="text-lg font-semibold tracking-tight">
             🧠 Brainstorm Partner
           </h1>
@@ -277,7 +295,9 @@ export default function BrainstormApp() {
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-6">
           <div className="max-w-3xl mx-auto space-y-4">
-            {messages.length === 0 && <EmptyState mode={mode} />}
+            {messages.length === 0 && (
+              <EmptyState mode={mode} onPick={(t) => setInput(t)} />
+            )}
             {messages.map((m, i) => (
               <Message
                 key={i}
@@ -439,7 +459,13 @@ function MindmapMessage({ content }: { content: string }) {
   );
 }
 
-function EmptyState({ mode }: { mode: ModeId }) {
+function EmptyState({
+  mode,
+  onPick,
+}: {
+  mode: ModeId;
+  onPick: (text: string) => void;
+}) {
   const m = MODE_LIST.find((x) => x.id === mode)!;
   return (
     <div className="text-center py-16 text-zinc-500">
@@ -449,8 +475,19 @@ function EmptyState({ mode }: { mode: ModeId }) {
       </h2>
       <p className="text-sm max-w-md mx-auto">{m.description}</p>
       <p className="text-xs mt-6 opacity-70">
-        Drück das Mikro oder tippe drauflos.
+        Drück das Mikro, tippe drauflos — oder probier eins von hier:
       </p>
+      <div className="mt-4 flex flex-col items-center gap-2 max-w-2xl mx-auto">
+        {m.examples.map((ex) => (
+          <button
+            key={ex}
+            onClick={() => onPick(ex)}
+            className="text-left text-sm px-4 py-2 rounded-full border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+          >
+            {ex}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

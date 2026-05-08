@@ -19,6 +19,8 @@ export default function SessionSidebar({
   onSignOut,
   refreshKey,
   enabled,
+  open,
+  onClose,
 }: {
   currentId: string | null;
   onSelect: (id: string) => void;
@@ -26,6 +28,8 @@ export default function SessionSidebar({
   onSignOut: () => void;
   refreshKey: number;
   enabled: boolean;
+  open: boolean;
+  onClose: () => void;
 }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,14 +66,37 @@ export default function SessionSidebar({
     );
   }
 
+  const wrapperClass = `
+    fixed inset-y-0 left-0 z-40 w-64 bg-white dark:bg-black
+    border-r border-zinc-200 dark:border-zinc-800 flex flex-col
+    transition-transform duration-200
+    md:relative md:translate-x-0 md:z-auto
+    ${open ? "translate-x-0" : "-translate-x-full md:translate-x-0"}
+  `;
+
   return (
-    <aside className="hidden md:flex w-64 shrink-0 border-r border-zinc-200 dark:border-zinc-800 flex-col">
+    <>
+      {open && (
+        <div
+          onClick={onClose}
+          className="fixed inset-0 bg-black/40 z-30 md:hidden"
+          aria-hidden
+        />
+      )}
+      <aside className={wrapperClass}>
       <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 flex gap-2">
         <button
           onClick={onNew}
           className="flex-1 text-sm rounded-lg bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 text-white py-2 font-medium"
         >
           + Neu
+        </button>
+        <button
+          onClick={onClose}
+          className="md:hidden text-sm px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 text-zinc-500"
+          aria-label="Sidebar schließen"
+        >
+          ✕
         </button>
       </div>
 
@@ -120,6 +147,7 @@ export default function SessionSidebar({
           Abmelden
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }
